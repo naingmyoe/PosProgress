@@ -1,4 +1,4 @@
-/**
+/**a
  * PostgreSQL Database Adapter for UN POS Backend Server
  * 100% Stateless & Direct Database Architecture
  * NO In-Memory Cache (Uses minimal RAM even with millions of records)
@@ -223,14 +223,44 @@ async function syncProducts(userPhone, productsList) {
   try {
     await client.query('BEGIN');
     for (const p of productsList) {
-      const pid = p.id;
-      if (!pid) continue;
-      const initialStock = Number(p.initialStock || p.initial_stock || p.quantity || 0);
+      // 1. Flexible Product ID Matching (Fixes undefined pid issue)
+      const pid = (p.id !== undefined && p.id !== null) ? p.id : 
+                  ((p.productId !== undefined && p.productId !== null) ? p.productId : p.product_id);
+      if (pid === undefined || pid === null) continue;
+
+      // 2. Flexible Quantity & Stock Matching
+      const newQty = Number(p.quantity !== undefined ? p.quantity : 
+                     (p.stock !== undefined ? p.stock : 
+                     (p.qty !== undefined ? p.qty : 0)));
+
+      let initialStock = Number(p.initialStock !== undefined ? p.initialStock : 
+                         (p.initial_stock !== undefined ? p.initial_stock : newQty));
+
       const sellingPrice = Number(p.sellingPrice !== undefined ? p.sellingPrice : (p.price || 0));
       const purchasePrice = Number(p.purchasePrice !== undefined ? p.purchasePrice : (p.cost || 0));
       const alertQty = Number(p.alertQuantity !== undefined ? p.alertQuantity : (p.alert_quantity || 0));
       const trackStock = p.trackStock !== undefined ? Boolean(p.trackStock) : (p.track_stock !== undefined ? Boolean(p.track_stock) : true);
       const note = p.note || '';
+
+      const isManualEdit = p.isManualStockAdjustment === true || p.is_manual_stock_adjustment === true;
+
+      // 3. Manual Stock Adjustment Logic: Baseline stock recalculation
+      if (isManualEdit) {
+        const deltaRes = await client.query(`
+          SELECT 
+            COALESCE(SUM(CASE WHEN v.is_purchase = FALSE THEN vi.quantity ELSE 0 END), 0) as sold,
+            COALESCE(SUM(CASE WHEN v.is_purchase = TRUE THEN vi.quantity ELSE 0 END), 0) as purchased
+          FROM voucher_items vi
+          JOIN vouchers v ON vi.receipt_no = v.receipt_no AND vi.user_phone = v.user_phone
+          WHERE vi.user_phone = $1 AND vi.product_id = $2 AND v.is_completed = TRUE
+        `, [userPhone, pid]);
+
+        const sold = Number(deltaRes.rows[0]?.sold || 0);
+        const purchased = Number(deltaRes.rows[0]?.purchased || 0);
+
+        // Adjust baseline so that (baseline + purchased - sold) = newQty
+        initialStock = Math.max(0, newQty + sold - purchased);
+      }
 
       await client.query(`
         INSERT INTO products (id, user_phone, name, category, group_name, unit, price, cost, quantity, initial_stock, alert_quantity, track_stock, note, sku, barcode, image_url, is_active, updated_at)
@@ -243,7 +273,7 @@ async function syncProducts(userPhone, productsList) {
           price = EXCLUDED.price,
           cost = EXCLUDED.cost,
           quantity = EXCLUDED.quantity,
-          initial_stock = EXCLUDED.initial_stock,
+          initial_stock = CASE WHEN $18 THEN EXCLUDED.initial_stock ELSE products.initial_stock END,
           alert_quantity = EXCLUDED.alert_quantity,
           track_stock = EXCLUDED.track_stock,
           note = EXCLUDED.note,
@@ -261,7 +291,7 @@ async function syncProducts(userPhone, productsList) {
         p.unit || 'Pcs',
         sellingPrice,
         purchasePrice,
-        Number(p.quantity || 0),
+        newQty,
         initialStock,
         alertQty,
         trackStock,
@@ -269,7 +299,8 @@ async function syncProducts(userPhone, productsList) {
         p.sku || '',
         p.barcode || '',
         p.imageUrl || p.image_url || p.imageUri || '',
-        p.updatedAt || p.updated_at || Date.now()
+        p.updatedAt || p.updated_at || Date.now(),
+        isManualEdit
       ]);
     }
     await client.query('COMMIT');
@@ -518,6 +549,7 @@ async function pullUserData(userPhone) {
 
   const products = prodRes.rows.map(r => ({
     id: Number(r.id),
+    productId: Number(r.id),
     name: r.name,
     category: r.category,
     group: r.group_name,
@@ -529,6 +561,7 @@ async function pullUserData(userPhone) {
     cost: Number(r.cost),
     purchasePrice: Number(r.cost),
     quantity: Number(r.quantity),
+    stock: Number(r.quantity),
     initialStock: Number(r.initial_stock),
     alertQuantity: Number(r.alert_quantity || 0),
     trackStock: r.track_stock !== false,
