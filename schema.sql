@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS products (
     cost NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     quantity NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
     initial_stock NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    alert_quantity NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    track_stock BOOLEAN DEFAULT TRUE,
+    note TEXT DEFAULT '',
     sku VARCHAR(100) DEFAULT '',
     barcode VARCHAR(100) DEFAULT '',
     image_url TEXT DEFAULT '',
@@ -42,6 +45,11 @@ CREATE TABLE IF NOT EXISTS products (
     updated_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT,
     PRIMARY KEY (user_phone, id)
 );
+
+-- Ensure migration columns exist in existing deployments
+ALTER TABLE products ADD COLUMN IF NOT EXISTS alert_quantity NUMERIC(12, 2) DEFAULT 0.00;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS track_stock BOOLEAN DEFAULT TRUE;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_products_user ON products(user_phone);
 CREATE INDEX IF NOT EXISTS idx_products_name ON products(user_phone, name);

@@ -983,10 +983,10 @@ object SyncManager {
                     cloudProductNames.add(normName)
 
                     val gName = if (p.has("groupName")) p.optString("groupName") else p.optString("group_name", "Default")
-                    val pPrice = if (p.has("purchasePrice")) p.optDouble("purchasePrice") else p.optDouble("purchase_price", 0.0)
-                    val sPrice = if (p.has("sellingPrice")) p.optDouble("sellingPrice") else p.optDouble("selling_price", 0.0)
+                    val pPrice = if (p.has("purchasePrice")) p.optDouble("purchasePrice") else if (p.has("cost")) p.optDouble("cost") else p.optDouble("purchase_price", 0.0)
+                    val sPrice = if (p.has("sellingPrice")) p.optDouble("sellingPrice") else if (p.has("price")) p.optDouble("price") else p.optDouble("selling_price", 0.0)
                     val aQty = if (p.has("alertQuantity")) p.optInt("alertQuantity") else p.optInt("alert_quantity", 0)
-                    val track = if (p.has("trackStock")) p.optBoolean("trackStock") else true
+                    val track = if (p.has("trackStock")) p.optBoolean("trackStock") else if (p.has("track_stock")) p.optBoolean("track_stock") else true
                     val barcode = p.optString("barcode", "")
                     val unit = p.optString("unit", "ခု")
                     val note = p.optString("note", "")

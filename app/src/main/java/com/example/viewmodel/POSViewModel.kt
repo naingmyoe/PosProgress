@@ -1216,6 +1216,7 @@ class POSViewModel(application: Application) : AndroidViewModel(application) {
                         isSynced = false
                     )
                     repository.updateProduct(updatedProduct)
+                    repository.updateStockAndAlert(currentEditing.id, qty, alert)
                     editingProduct.value = null
                     savedProduct = updatedProduct
 

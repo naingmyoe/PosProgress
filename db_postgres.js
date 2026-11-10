@@ -226,9 +226,15 @@ async function syncProducts(userPhone, productsList) {
       const pid = p.id;
       if (!pid) continue;
       const initialStock = Number(p.initialStock || p.initial_stock || p.quantity || 0);
+      const sellingPrice = Number(p.sellingPrice !== undefined ? p.sellingPrice : (p.price || 0));
+      const purchasePrice = Number(p.purchasePrice !== undefined ? p.purchasePrice : (p.cost || 0));
+      const alertQty = Number(p.alertQuantity !== undefined ? p.alertQuantity : (p.alert_quantity || 0));
+      const trackStock = p.trackStock !== undefined ? Boolean(p.trackStock) : (p.track_stock !== undefined ? Boolean(p.track_stock) : true);
+      const note = p.note || '';
+
       await client.query(`
-        INSERT INTO products (id, user_phone, name, category, group_name, unit, price, cost, quantity, initial_stock, sku, barcode, image_url, is_active, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14)
+        INSERT INTO products (id, user_phone, name, category, group_name, unit, price, cost, quantity, initial_stock, alert_quantity, track_stock, note, sku, barcode, image_url, is_active, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, TRUE, $17)
         ON CONFLICT (user_phone, id) DO UPDATE SET
           name = EXCLUDED.name,
           category = EXCLUDED.category,
@@ -238,6 +244,9 @@ async function syncProducts(userPhone, productsList) {
           cost = EXCLUDED.cost,
           quantity = EXCLUDED.quantity,
           initial_stock = EXCLUDED.initial_stock,
+          alert_quantity = EXCLUDED.alert_quantity,
+          track_stock = EXCLUDED.track_stock,
+          note = EXCLUDED.note,
           sku = EXCLUDED.sku,
           barcode = EXCLUDED.barcode,
           image_url = EXCLUDED.image_url,
@@ -248,15 +257,18 @@ async function syncProducts(userPhone, productsList) {
         userPhone,
         p.name || '',
         p.category || 'General',
-        p.group || p.group_name || '',
+        p.group || p.group_name || p.groupName || '',
         p.unit || 'Pcs',
-        Number(p.price || 0),
-        Number(p.cost || 0),
+        sellingPrice,
+        purchasePrice,
         Number(p.quantity || 0),
         initialStock,
+        alertQty,
+        trackStock,
+        note,
         p.sku || '',
         p.barcode || '',
-        p.imageUrl || p.image_url || '',
+        p.imageUrl || p.image_url || p.imageUri || '',
         p.updatedAt || p.updated_at || Date.now()
       ]);
     }
@@ -510,14 +522,21 @@ async function pullUserData(userPhone) {
     category: r.category,
     group: r.group_name,
     group_name: r.group_name,
+    groupName: r.group_name,
     unit: r.unit,
     price: Number(r.price),
+    sellingPrice: Number(r.price),
     cost: Number(r.cost),
+    purchasePrice: Number(r.cost),
     quantity: Number(r.quantity),
     initialStock: Number(r.initial_stock),
+    alertQuantity: Number(r.alert_quantity || 0),
+    trackStock: r.track_stock !== false,
+    note: r.note || '',
     sku: r.sku,
     barcode: r.barcode,
     imageUrl: r.image_url,
+    imageUri: r.image_url,
     updatedAt: Number(r.updated_at)
   }));
 

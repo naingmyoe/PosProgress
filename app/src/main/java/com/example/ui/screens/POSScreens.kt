@@ -3776,6 +3776,28 @@ fun ProductsListScreen(navController: NavController, viewModel: POSViewModel) {
                 ) {
                     Text("ပြင်ဆင်မည်", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        val prod = selectedProductForQty!!
+                        showQuantityDrawer = false
+                        selectedProductForQty = null
+                        viewModel.loadProductToForm(prod)
+                        navController.navigate("add_product")
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = BrandPurple),
+                    border = BorderStroke(1.5.dp, BrandPurple),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.Edit, contentDescription = "Edit Product", modifier = Modifier.size(18.dp), tint = BrandPurple)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("ကုန်စည်အသေးစိတ် / စတော့ အကုန်ပြင်ရန်", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = BrandPurple)
+                }
             }
         }
     }
