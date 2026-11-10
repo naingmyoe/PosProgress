@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database Service
+  postgres:
+    image: postgres:16-alpine
+    container_name: un_pos_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: pos_db
+      POSTGRES_USER: pos_user
+      POSTGRES_PASSWORD: pos_secure_password_123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pos_user -d pos_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. UN POS Backend Server Service
+  pos_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: un_pos_server
+    restart: always
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: 8081
+      DATABASE_URL: postgresql://pos_user:pos_secure_password_123@postgres:5432/pos_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./public:/app/public
+      - ./pos_db.json:/app/pos_db.json
+
+volumes:
+  pgdata:
+    driver: local

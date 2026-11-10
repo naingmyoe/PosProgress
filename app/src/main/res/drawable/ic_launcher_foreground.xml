@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.6"
+        android:scaleY="0.6"
+        android:translateX="21.6"
+        android:translateY="21.6">
+        <!-- Rounded Background Badge -->
+        <path
+            android:fillColor="#5E35B1"
+            android:pathData="M16,6h76c5.52,0 10,4.48 10,10v76c0,5.52 -4.48,10 -10,10h-76c-5.52,0 -10,-4.48 -10,-10v-76c0,-5.52 4.48,-10 10,-10z" />
+        <!-- Screen / Register Top -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M26,20h56c3.31,0 6,2.69 6,6v24c0,3.31 -2.69,6 -6,6h-56c-3.31,0 -6,-2.69 -6,-6v-24c0,-3.31 2.69,-6 6,-6z" />
+        <!-- Screen details: Chart / POS Line -->
+        <path
+            android:fillColor="#5E35B1"
+            android:pathData="M32,32h20v4h-20z M32,40h34v4h-34z M70,30h10v16h-10z" />
+        <!-- Base / Keyboard & Drawer -->
+        <path
+            android:fillColor="#EDE7F6"
+            android:pathData="M18,60h72l4,22h-80z" />
+        <path
+            android:fillColor="#D1C4E9"
+            android:pathData="M14,82h80v4c0,2.21 -1.79,4 -4,4h-72c-2.21,0 -4,-1.79 -4,-4z" />
+        <!-- Keypad buttons -->
+        <path
+            android:fillColor="#5E35B1"
+            android:pathData="M30,66h8v4h-8z M44,66h8v4h-8z M58,66h8v4h-8z M72,66h8v4h-8z M30,73h8v4h-8z M44,73h8v4h-8z M58,73h8v4h-8z M72,73h8v4h-8z" />
+    </group>
+</vector>

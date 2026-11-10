@@ -1,0 +1,6 @@
+{
+  "name": "UN POS",
+  "description": "Offline-first, professional mobile POS system with detailed analytics, product catalogs, voucher generation, and accounts management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

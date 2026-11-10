@@ -1,0 +1,22 @@
+{
+  "name": "un-pos-server",
+  "version": "1.0.0",
+  "description": "UN POS Backend Server with PostgreSQL and JSON File Storage Support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "migrate": "node -e \"require('./db_postgres').initPostgres()\""
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "keywords": [
+    "pos",
+    "postgresql",
+    "offline-first",
+    "android-sync"
+  ],
+  "author": "UN POS",
+  "license": "MIT"
+}
