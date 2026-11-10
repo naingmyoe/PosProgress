@@ -11,7 +11,6 @@ COPY server.js ./
 COPY db_postgres.js ./
 COPY schema.sql ./
 COPY admin.html ./
-COPY pos_db.json* ./
 
 EXPOSE 8081
 

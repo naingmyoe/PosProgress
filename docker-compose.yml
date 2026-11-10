@@ -38,7 +38,6 @@ services:
         condition: service_healthy
     volumes:
       - ./public:/app/public
-      - ./pos_db.json:/app/pos_db.json
 
 volumes:
   pgdata:

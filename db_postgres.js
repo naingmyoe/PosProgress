@@ -1,7 +1,7 @@
 /**
  * PostgreSQL Database Adapter for UN POS Backend Server
- * Supports connection pooling, automatic schema migration,
- * and seamless fallback if PostgreSQL is not configured.
+ * 100% Stateless & Direct Database Architecture
+ * NO In-Memory Cache (Uses minimal RAM even with millions of records)
  */
 
 const fs = require('fs');
@@ -12,7 +12,7 @@ try {
   const pg = require('pg');
   Pool = pg.Pool;
 } catch (e) {
-  // pg library not yet installed via npm
+  // pg library
 }
 
 let pool = null;
@@ -21,20 +21,14 @@ let isPostgresConnected = false;
 function getConnectionString() {
   return process.env.DATABASE_URL || 
          process.env.POSTGRES_URL ||
-         (process.env.PGHOST ? `postgresql://${process.env.PGUSER || 'postgres'}:${process.env.PGPASSWORD || ''}@${process.env.PGHOST}:${process.env.PGPORT || 5432}/${process.env.PGDATABASE || 'pos_db'}` : null);
+         (process.env.PGHOST ? `postgresql://${process.env.PGUSER || 'postgres'}:${process.env.PGPASSWORD || ''}@${process.env.PGHOST}:${process.env.PGPORT || 5432}/${process.env.PGDATABASE || 'pos_db'}` : 'postgresql://pos_user:pos1234@localhost:5432/pos_db');
 }
 
 async function initPostgres() {
   const connStr = getConnectionString();
-  if (!connStr) {
-    console.log('[PostgreSQL] No DATABASE_URL or PGHOST provided. Running in JSON file mode (pos_db.json).');
-    return false;
-  }
 
   if (!Pool) {
-    console.warn('[PostgreSQL Warning] DATABASE_URL is set, but "pg" module is not installed.');
-    console.warn('[PostgreSQL Warning] Please run: npm install pg');
-    console.warn('[PostgreSQL Warning] Falling back to JSON file mode for now.');
+    console.error('[PostgreSQL Error] "pg" module is not installed. Please run: npm install pg');
     return false;
   }
 
@@ -53,14 +47,14 @@ async function initPostgres() {
     });
 
     const client = await pool.connect();
-    console.log('[PostgreSQL] Connected successfully to PostgreSQL database!');
+    console.log('[PostgreSQL] Connected successfully to PostgreSQL database pool!');
 
-    // Initialize Schema
+    // Initialize Schema from schema.sql
     const schemaPath = path.join(__dirname, 'schema.sql');
     if (fs.existsSync(schemaPath)) {
       const schemaSql = fs.readFileSync(schemaPath, 'utf8');
       await client.query(schemaSql);
-      console.log('[PostgreSQL] Schema initialized successfully from schema.sql');
+      console.log('[PostgreSQL] Schema verified and initialized successfully from schema.sql');
     }
 
     client.release();
@@ -68,235 +62,170 @@ async function initPostgres() {
     return true;
   } catch (err) {
     console.error(`[PostgreSQL Error] Connection failed: ${err.message}`);
-    console.warn('[PostgreSQL] Falling back to local JSON file mode.');
     isPostgresConnected = false;
     return false;
   }
 }
 
-// Load all data from PostgreSQL into in-memory DB structure
-async function loadAllFromPostgres() {
-  if (!isPostgresConnected || !pool) return null;
+// -------------------------------------------------------------
+// USER & AUTH QUERIES (Direct PostgreSQL)
+// -------------------------------------------------------------
 
-  try {
-    const db = {
-      users: {},
-      cloud_vouchers: {},
-      cloud_voucher_items: {},
-      cloud_products: {},
-      cloud_initial_stock: {},
-      cloud_customers: {},
-      cloud_product_groups: {},
-      cloud_product_units: {},
-      cloud_payments: {},
-      cloud_suppliers: {},
-      cloud_expense_categories: {},
-      cloud_expenses: {}
-    };
+async function getUserByPhone(phone) {
+  if (!pool || !phone) return null;
+  const res = await pool.query('SELECT * FROM users WHERE phone = $1', [phone]);
+  if (res.rows.length === 0) return null;
+  const r = res.rows[0];
+  return {
+    phone: r.phone,
+    phoneNo: r.phone,
+    name: r.name,
+    username: r.name,
+    shop_name: r.shop_name,
+    businessName: r.shop_name,
+    password: r.password,
+    role: r.role,
+    status: r.status,
+    device_id: r.device_id,
+    devices: r.devices || [],
+    created_at: Number(r.created_at),
+    expires_at: r.expires_at ? Number(r.expires_at) : null,
+    notes: r.notes
+  };
+}
 
-    // 1. Users
-    const usersRes = await pool.query('SELECT * FROM users');
-    for (const row of usersRes.rows) {
-      db.users[row.phone] = {
-        phone: row.phone,
-        name: row.name,
-        shop_name: row.shop_name,
-        password: row.password,
-        role: row.role,
-        status: row.status,
-        device_id: row.device_id,
-        devices: row.devices || [],
-        created_at: Number(row.created_at),
-        expires_at: row.expires_at ? Number(row.expires_at) : null,
-        notes: row.notes
-      };
-    }
+async function createUser(u) {
+  if (!pool || !u) return null;
+  const phone = u.phone || u.phoneNo;
+  const now = Date.now();
+  const expiresAt = u.expires_at || (now + 7 * 24 * 60 * 60 * 1000);
+  await pool.query(`
+    INSERT INTO users (phone, name, shop_name, password, role, status, device_id, devices, created_at, expires_at, notes)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (phone) DO UPDATE SET
+      name = EXCLUDED.name,
+      shop_name = EXCLUDED.shop_name,
+      password = EXCLUDED.password,
+      role = EXCLUDED.role,
+      status = EXCLUDED.status,
+      device_id = EXCLUDED.device_id,
+      devices = EXCLUDED.devices,
+      expires_at = EXCLUDED.expires_at,
+      notes = EXCLUDED.notes
+  `, [
+    phone,
+    u.name || u.username || '',
+    u.shop_name || u.shopName || u.businessName || '',
+    u.password || '',
+    u.role || 'user',
+    u.status || 'on',
+    u.device_id || u.deviceId || '',
+    JSON.stringify(u.devices || []),
+    u.created_at || now,
+    expiresAt,
+    u.notes || ''
+  ]);
+  return getUserByPhone(phone);
+}
 
-    // 2. Products
-    const prodRes = await pool.query('SELECT * FROM products WHERE is_active = TRUE');
-    for (const row of prodRes.rows) {
-      const uPhone = row.user_phone;
-      if (!db.cloud_products[uPhone]) db.cloud_products[uPhone] = {};
-      db.cloud_products[uPhone][String(row.id)] = {
-        id: Number(row.id),
-        name: row.name,
-        category: row.category,
-        group_name: row.group_name,
-        unit: row.unit,
-        price: Number(row.price),
-        cost: Number(row.cost),
-        quantity: Number(row.quantity),
-        initial_stock: Number(row.initial_stock),
-        sku: row.sku,
-        barcode: row.barcode,
-        image_url: row.image_url,
-        updated_at: Number(row.updated_at)
-      };
-    }
+async function updateUser(phone, fields) {
+  if (!pool || !phone || !fields) return;
+  const updates = [];
+  const values = [phone];
+  let idx = 2;
 
-    // 3. Initial Stock
-    const initStockRes = await pool.query('SELECT * FROM initial_stock');
-    for (const row of initStockRes.rows) {
-      const uPhone = row.user_phone;
-      if (!db.cloud_initial_stock[uPhone]) db.cloud_initial_stock[uPhone] = {};
-      db.cloud_initial_stock[uPhone][row.product_key] = Number(row.initial_stock);
-    }
+  if (fields.name !== undefined) { updates.push(`name = $${idx++}`); values.push(fields.name); }
+  if (fields.shop_name !== undefined) { updates.push(`shop_name = $${idx++}`); values.push(fields.shop_name); }
+  if (fields.password !== undefined) { updates.push(`password = $${idx++}`); values.push(fields.password); }
+  if (fields.role !== undefined) { updates.push(`role = $${idx++}`); values.push(fields.role); }
+  if (fields.status !== undefined) { updates.push(`status = $${idx++}`); values.push(fields.status); }
+  if (fields.device_id !== undefined) { updates.push(`device_id = $${idx++}`); values.push(fields.device_id); }
+  if (fields.devices !== undefined) { updates.push(`devices = $${idx++}`); values.push(JSON.stringify(fields.devices)); }
+  if (fields.expires_at !== undefined) { updates.push(`expires_at = $${idx++}`); values.push(fields.expires_at); }
+  if (fields.notes !== undefined) { updates.push(`notes = $${idx++}`); values.push(fields.notes); }
 
-    // 4. Vouchers
-    const vouchRes = await pool.query('SELECT * FROM vouchers');
-    for (const row of vouchRes.rows) {
-      const uPhone = row.user_phone;
-      if (!db.cloud_vouchers[uPhone]) db.cloud_vouchers[uPhone] = {};
-      db.cloud_vouchers[uPhone][row.receipt_no] = {
-        receiptNo: row.receipt_no,
-        voucherId: row.voucher_id ? Number(row.voucher_id) : null,
-        customerName: row.customer_name,
-        customerPhone: row.customer_phone,
-        totalAmount: Number(row.total_amount),
-        discount: Number(row.discount),
-        netAmount: Number(row.net_amount),
-        tax: Number(row.tax),
-        paidAmount: Number(row.paid_amount),
-        changeAmount: Number(row.change_amount),
-        paymentMethod: row.payment_method,
-        isCompleted: row.is_completed,
-        isPurchase: row.is_purchase,
-        isCredit: row.is_credit,
-        notes: row.notes,
-        createdAt: Number(row.created_at),
-        updatedAt: Number(row.updated_at)
-      };
-    }
-
-    // 5. Voucher Items
-    const itemsRes = await pool.query('SELECT * FROM voucher_items');
-    for (const row of itemsRes.rows) {
-      const uPhone = row.user_phone;
-      if (!db.cloud_voucher_items[uPhone]) db.cloud_voucher_items[uPhone] = [];
-      db.cloud_voucher_items[uPhone].push({
-        id: row.id,
-        voucher_id: row.receipt_no,
-        receiptNo: row.receipt_no,
-        product_id: row.product_id ? Number(row.product_id) : null,
-        product_name: row.product_name,
-        quantity: Number(row.quantity),
-        unit_price: Number(row.unit_price),
-        total_price: Number(row.total_price),
-        cost_price: Number(row.cost_price),
-        unit: row.unit
-      });
-    }
-
-    // 6. Customers
-    const custRes = await pool.query('SELECT * FROM customers');
-    for (const row of custRes.rows) {
-      const uPhone = row.user_phone;
-      if (!db.cloud_customers[uPhone]) db.cloud_customers[uPhone] = {};
-      db.cloud_customers[uPhone][row.name] = {
-        id: row.id,
-        name: row.name,
-        phone: row.phone,
-        email: row.email,
-        address: row.address,
-        totalDebt: Number(row.total_debt),
-        points: row.points
-      };
-    }
-
-    // 7. Groups & Units
-    const groupsRes = await pool.query('SELECT user_phone, name FROM product_groups');
-    for (const row of groupsRes.rows) {
-      if (!db.cloud_product_groups[row.user_phone]) db.cloud_product_groups[row.user_phone] = [];
-      db.cloud_product_groups[row.user_phone].push(row.name);
-    }
-
-    const unitsRes = await pool.query('SELECT user_phone, name FROM product_units');
-    for (const row of unitsRes.rows) {
-      if (!db.cloud_product_units[row.user_phone]) db.cloud_product_units[row.user_phone] = [];
-      db.cloud_product_units[row.user_phone].push(row.name);
-    }
-
-    // 8. Payments
-    const payRes = await pool.query('SELECT * FROM payments');
-    for (const row of payRes.rows) {
-      if (!db.cloud_payments[row.user_phone]) db.cloud_payments[row.user_phone] = [];
-      db.cloud_payments[row.user_phone].push({
-        voucherId: row.voucher_id,
-        customerName: row.customer_name,
-        amount: Number(row.amount),
-        paymentMethod: row.payment_method,
-        paymentType: row.payment_type,
-        date: Number(row.date),
-        notes: row.notes
-      });
-    }
-
-    // 9. Suppliers
-    const suppRes = await pool.query('SELECT * FROM suppliers');
-    for (const row of suppRes.rows) {
-      if (!db.cloud_suppliers[row.user_phone]) db.cloud_suppliers[row.user_phone] = {};
-      db.cloud_suppliers[row.user_phone][row.name] = {
-        name: row.name,
-        phone: row.phone,
-        email: row.email,
-        address: row.address,
-        totalPayable: Number(row.total_payable)
-      };
-    }
-
-    console.log(`[PostgreSQL] Loaded data from PostgreSQL (${Object.keys(db.users).length} users)`);
-    return db;
-  } catch (err) {
-    console.error(`[PostgreSQL Error] Failed to load data: ${err.message}`);
-    return null;
+  if (updates.length > 0) {
+    await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE phone = $1`, values);
   }
 }
 
-// Save a user
-async function saveUser(u) {
-  if (!isPostgresConnected || !pool) return;
-  try {
-    await pool.query(`
-      INSERT INTO users (phone, name, shop_name, password, role, status, device_id, devices, created_at, expires_at, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-      ON CONFLICT (phone) DO UPDATE SET
-        name = EXCLUDED.name,
-        shop_name = EXCLUDED.shop_name,
-        password = EXCLUDED.password,
-        role = EXCLUDED.role,
-        status = EXCLUDED.status,
-        device_id = EXCLUDED.device_id,
-        devices = EXCLUDED.devices,
-        expires_at = EXCLUDED.expires_at,
-        notes = EXCLUDED.notes
-    `, [
-      u.phone || u.phoneNo,
-      u.name || '',
-      u.shop_name || u.shopName || '',
-      u.password || '',
-      u.role || 'user',
-      u.status || 'active',
-      u.device_id || '',
-      JSON.stringify(u.devices || []),
-      u.created_at || Date.now(),
-      u.expires_at || null,
-      u.notes || ''
-    ]);
-  } catch (err) {
-    console.error(`[PostgreSQL Error] saveUser: ${err.message}`);
-  }
+async function deleteUser(phone) {
+  if (!pool || !phone) return;
+  await pool.query('DELETE FROM users WHERE phone = $1', [phone]);
 }
 
-// Save products batch
-async function saveProducts(userPhone, productsMap) {
-  if (!isPostgresConnected || !pool || !userPhone) return;
+async function getAllUsers() {
+  if (!pool) return [];
+  const res = await pool.query('SELECT phone, name, shop_name, role, status, device_id, devices, created_at, expires_at FROM users ORDER BY created_at DESC');
+  return res.rows.map(r => ({
+    phoneNo: r.phone,
+    username: r.name,
+    businessName: r.shop_name,
+    role: r.role,
+    status: r.status,
+    deviceId: r.device_id,
+    devices: r.devices || [],
+    deviceCount: (r.devices || []).length,
+    createdAt: Number(r.created_at),
+    expiresAt: r.expires_at ? Number(r.expires_at) : null
+  }));
+}
+
+// -------------------------------------------------------------
+// ADMIN STATS & SETTINGS
+// -------------------------------------------------------------
+
+async function getAdminStats() {
+  if (!pool) return { totalUsers: 0, activeUsers: 0, expiredUsers: 0, totalSales: 0, totalVouchers: 0, totalProducts: 0 };
+  const res = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM users) as total_users,
+      (SELECT COUNT(*) FROM users WHERE status = 'on' OR status = 'active') as active_users,
+      (SELECT COUNT(*) FROM users WHERE status = 'expired') as expired_users,
+      (SELECT COALESCE(SUM(total_amount), 0) FROM vouchers WHERE is_purchase = FALSE) as total_sales,
+      (SELECT COUNT(*) FROM vouchers) as total_vouchers,
+      (SELECT COUNT(*) FROM products WHERE is_active = TRUE) as total_products
+  `);
+  const r = res.rows[0];
+  return {
+    totalUsers: Number(r.total_users || 0),
+    activeUsers: Number(r.active_users || 0),
+    expiredUsers: Number(r.expired_users || 0),
+    totalSales: Number(r.total_sales || 0),
+    totalVouchers: Number(r.total_vouchers || 0),
+    totalProducts: Number(r.total_products || 0)
+  };
+}
+
+async function getAdminPassword() {
+  if (!pool) return 'admin1234';
+  const res = await pool.query("SELECT setting_value FROM admin_settings WHERE setting_key = 'admin_password'");
+  if (res.rows.length > 0) return res.rows[0].setting_value;
+  return 'admin1234';
+}
+
+async function setAdminPassword(password) {
+  if (!pool || !password) return;
+  await pool.query(`
+    INSERT INTO admin_settings (setting_key, setting_value, updated_at)
+    VALUES ('admin_password', $1, $2)
+    ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = EXCLUDED.updated_at
+  `, [password, Date.now()]);
+}
+
+// -------------------------------------------------------------
+// PRODUCTS & INVENTORY QUERIES (Direct PostgreSQL)
+// -------------------------------------------------------------
+
+async function syncProducts(userPhone, productsList) {
+  if (!pool || !userPhone || !Array.isArray(productsList)) return 0;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const key of Object.keys(productsMap)) {
-      const p = productsMap[key];
-      const pid = p.id || parseInt(key, 10);
+    for (const p of productsList) {
+      const pid = p.id;
       if (!pid) continue;
+      const initialStock = Number(p.initialStock || p.initial_stock || p.quantity || 0);
       await client.query(`
         INSERT INTO products (id, user_phone, name, category, group_name, unit, price, cost, quantity, initial_stock, sku, barcode, image_url, is_active, updated_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, TRUE, $14)
@@ -319,179 +248,413 @@ async function saveProducts(userPhone, productsMap) {
         userPhone,
         p.name || '',
         p.category || 'General',
-        p.group_name || p.group || '',
+        p.group || p.group_name || '',
         p.unit || 'Pcs',
         Number(p.price || 0),
         Number(p.cost || 0),
         Number(p.quantity || 0),
-        Number(p.initial_stock || p.initialStock || 0),
+        initialStock,
         p.sku || '',
         p.barcode || '',
-        p.image_url || p.imageUrl || '',
-        p.updated_at || Date.now()
+        p.imageUrl || p.image_url || '',
+        p.updatedAt || p.updated_at || Date.now()
       ]);
     }
     await client.query('COMMIT');
+    return productsList.length;
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(`[PostgreSQL Error] saveProducts: ${err.message}`);
+    console.error(`[PostgreSQL Error] syncProducts: ${err.message}`);
+    throw err;
   } finally {
     client.release();
   }
 }
 
-// Save vouchers batch
-async function saveVouchers(userPhone, vouchersMap, voucherItemsList) {
-  if (!isPostgresConnected || !pool || !userPhone) return;
+async function deleteProduct(userPhone, productId, productName) {
+  if (!pool || !userPhone) return;
+  if (productId) {
+    await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND id = $2', [userPhone, productId]);
+  } else if (productName) {
+    await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND LOWER(name) = LOWER($2)', [userPhone, productName]);
+  }
+}
+
+async function deleteProductsBatch(userPhone, productIds, productNames) {
+  if (!pool || !userPhone) return;
+  if (Array.isArray(productIds) && productIds.length > 0) {
+    await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND id = ANY($2::bigint[])', [userPhone, productIds]);
+  }
+  if (Array.isArray(productNames) && productNames.length > 0) {
+    await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND name = ANY($2::text[])', [userPhone, productNames]);
+  }
+}
+
+// -------------------------------------------------------------
+// VOUCHERS & TRANSACTIONS (Direct PostgreSQL)
+// -------------------------------------------------------------
+
+async function syncVoucher(userPhone, v, items) {
+  if (!pool || !userPhone || !v) return;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    for (const key of Object.keys(vouchersMap)) {
-      const v = vouchersMap[key];
-      const receiptNo = v.receiptNo || v.receipt_no || key;
-      await client.query(`
-        INSERT INTO vouchers (receipt_no, user_phone, voucher_id, customer_name, customer_phone, total_amount, discount, net_amount, tax, paid_amount, change_amount, payment_method, is_completed, is_purchase, is_credit, notes, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-        ON CONFLICT (user_phone, receipt_no) DO UPDATE SET
-          customer_name = EXCLUDED.customer_name,
-          customer_phone = EXCLUDED.customer_phone,
-          total_amount = EXCLUDED.total_amount,
-          discount = EXCLUDED.discount,
-          net_amount = EXCLUDED.net_amount,
-          tax = EXCLUDED.tax,
-          paid_amount = EXCLUDED.paid_amount,
-          change_amount = EXCLUDED.change_amount,
-          payment_method = EXCLUDED.payment_method,
-          is_completed = EXCLUDED.is_completed,
-          is_purchase = EXCLUDED.is_purchase,
-          is_credit = EXCLUDED.is_credit,
-          notes = EXCLUDED.notes,
-          updated_at = EXCLUDED.updated_at
-      `, [
-        receiptNo,
-        userPhone,
-        v.voucherId || v.voucher_id || null,
-        v.customerName || v.customer_name || 'Walk-in Customer',
-        v.customerPhone || v.customer_phone || '',
-        Number(v.totalAmount || v.total_amount || 0),
-        Number(v.discount || 0),
-        Number(v.netAmount || v.net_amount || 0),
-        Number(v.tax || 0),
-        Number(v.paidAmount || v.paid_amount || 0),
-        Number(v.changeAmount || v.change_amount || 0),
-        v.paymentMethod || v.payment_method || 'Cash',
-        v.isCompleted === true || v.isCompleted === 1,
-        v.isPurchase === true || v.isPurchase === 1,
-        v.isCredit === true || v.isCredit === 1,
-        v.notes || '',
-        Number(v.createdAt || v.created_at || Date.now()),
-        Number(v.updatedAt || v.updated_at || Date.now())
-      ]);
-    }
+    const receiptNo = v.receiptNo || v.receipt_no;
+    await client.query(`
+      INSERT INTO vouchers (receipt_no, user_phone, voucher_id, customer_name, customer_phone, total_amount, discount, net_amount, tax, paid_amount, change_amount, payment_method, is_completed, is_purchase, is_credit, notes, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      ON CONFLICT (user_phone, receipt_no) DO UPDATE SET
+        customer_name = EXCLUDED.customer_name,
+        customer_phone = EXCLUDED.customer_phone,
+        total_amount = EXCLUDED.total_amount,
+        discount = EXCLUDED.discount,
+        net_amount = EXCLUDED.net_amount,
+        tax = EXCLUDED.tax,
+        paid_amount = EXCLUDED.paid_amount,
+        change_amount = EXCLUDED.change_amount,
+        payment_method = EXCLUDED.payment_method,
+        is_completed = EXCLUDED.is_completed,
+        is_purchase = EXCLUDED.is_purchase,
+        is_credit = EXCLUDED.is_credit,
+        notes = EXCLUDED.notes,
+        updated_at = EXCLUDED.updated_at
+    `, [
+      receiptNo,
+      userPhone,
+      v.voucherId || v.voucher_id || null,
+      v.customerName || v.customer_name || 'Walk-in Customer',
+      v.customerPhone || v.customer_phone || '',
+      Number(v.totalAmount || v.total_amount || 0),
+      Number(v.discount || 0),
+      Number(v.netAmount || v.net_amount || 0),
+      Number(v.tax || 0),
+      Number(v.paidAmount || v.paid_amount || 0),
+      Number(v.changeAmount || v.change_amount || 0),
+      v.paymentMethod || v.payment_method || 'Cash',
+      v.isCompleted === true || v.isCompleted === 1,
+      v.isPurchase === true || v.isPurchase === 1,
+      v.isCredit === true || v.isCredit === 1,
+      v.notes || '',
+      Number(v.createdAt || v.created_at || Date.now()),
+      Number(v.updatedAt || v.updated_at || Date.now())
+    ]);
 
-    if (Array.isArray(voucherItemsList) && voucherItemsList.length > 0) {
-      for (const it of voucherItemsList) {
-        const receiptNo = it.voucher_id || it.receiptNo || it.voucherId;
-        if (!receiptNo) continue;
+    // Replace items
+    await client.query('DELETE FROM voucher_items WHERE user_phone = $1 AND receipt_no = $2', [userPhone, receiptNo]);
+    if (Array.isArray(items) && items.length > 0) {
+      for (const it of items) {
         await client.query(`
           INSERT INTO voucher_items (user_phone, receipt_no, voucher_id, product_id, product_name, quantity, unit_price, total_price, cost_price, unit)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         `, [
           userPhone,
           receiptNo,
-          it.voucherId || it.voucher_id || null,
-          it.product_id || it.productId || null,
-          it.product_name || it.productName || '',
+          v.voucherId || v.voucher_id || null,
+          it.productId || it.product_id || null,
+          it.productName || it.product_name || '',
           Number(it.quantity || 1),
-          Number(it.unit_price || it.unitPrice || 0),
-          Number(it.total_price || it.totalPrice || 0),
-          Number(it.cost_price || it.costPrice || 0),
+          Number(it.unitPrice || it.sellingPrice || it.selling_price || it.unit_price || 0),
+          Number(it.totalPrice || it.total_price || 0),
+          Number(it.costPrice || it.purchasePrice || it.purchase_price || it.cost_price || 0),
           it.unit || 'Pcs'
         ]);
       }
     }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(`[PostgreSQL Error] saveVouchers: ${err.message}`);
+    console.error(`[PostgreSQL Error] syncVoucher: ${err.message}`);
+    throw err;
   } finally {
     client.release();
   }
 }
 
-// Delete product
-async function deleteProduct(userPhone, productId, productName) {
-  if (!isPostgresConnected || !pool || !userPhone) return;
-  try {
-    if (productId) {
-      await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND id = $2', [userPhone, productId]);
-    } else if (productName) {
-      await pool.query('UPDATE products SET is_active = FALSE WHERE user_phone = $1 AND LOWER(name) = LOWER($2)', [userPhone, productName]);
-    }
-  } catch (err) {
-    console.error(`[PostgreSQL Error] deleteProduct: ${err.message}`);
+async function syncVouchersBatch(userPhone, vouchersList) {
+  if (!pool || !userPhone || !Array.isArray(vouchersList)) return 0;
+  for (const entry of vouchersList) {
+    const v = entry.voucher || entry;
+    const items = entry.items || [];
+    await syncVoucher(userPhone, v, items);
   }
+  return vouchersList.length;
 }
 
-// Delete voucher
 async function deleteVoucher(userPhone, receiptNo) {
-  if (!isPostgresConnected || !pool || !userPhone || !receiptNo) return;
-  try {
-    await pool.query('DELETE FROM voucher_items WHERE user_phone = $1 AND receipt_no = $2', [userPhone, receiptNo]);
-    await pool.query('DELETE FROM vouchers WHERE user_phone = $1 AND receipt_no = $2', [userPhone, receiptNo]);
-  } catch (err) {
-    console.error(`[PostgreSQL Error] deleteVoucher: ${err.message}`);
+  if (!pool || !userPhone || !receiptNo) return;
+  await pool.query('DELETE FROM voucher_items WHERE user_phone = $1 AND receipt_no = $2', [userPhone, receiptNo]);
+  await pool.query('DELETE FROM vouchers WHERE user_phone = $1 AND receipt_no = $2', [userPhone, receiptNo]);
+}
+
+// -------------------------------------------------------------
+// AUXILIARY ENTITIES (Customers, Groups, Units, Payments, Suppliers)
+// -------------------------------------------------------------
+
+async function syncCustomers(userPhone, customersList) {
+  if (!pool || !userPhone || !Array.isArray(customersList)) return;
+  for (const c of customersList) {
+    if (!c.name) continue;
+    await pool.query(`
+      INSERT INTO customers (user_phone, name, phone, email, address, total_debt, points, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (user_phone, name) DO UPDATE SET
+        phone = EXCLUDED.phone,
+        email = EXCLUDED.email,
+        address = EXCLUDED.address,
+        total_debt = EXCLUDED.total_debt,
+        points = EXCLUDED.points
+    `, [
+      userPhone,
+      c.name,
+      c.phone || '',
+      c.email || '',
+      c.address || '',
+      Number(c.totalDebt || 0),
+      Number(c.points || 0),
+      Date.now()
+    ]);
   }
 }
 
-// Auto-migrate from JSON if PostgreSQL has 0 users
-async function autoMigrateFromJson(jsonData) {
-  if (!isPostgresConnected || !pool || !jsonData) return;
-  try {
-    const countRes = await pool.query('SELECT COUNT(*) as count FROM users');
-    const userCount = parseInt(countRes.rows[0].count, 10);
-    if (userCount > 0) return; // Already has data
-
-    console.log('[PostgreSQL] PostgreSQL is empty. Auto-migrating data from pos_db.json...');
-
-    // Migrate users
-    if (jsonData.users) {
-      for (const phone of Object.keys(jsonData.users)) {
-        await saveUser(jsonData.users[phone]);
-      }
-    }
-
-    // Migrate products
-    if (jsonData.cloud_products) {
-      for (const phone of Object.keys(jsonData.cloud_products)) {
-        await saveProducts(phone, jsonData.cloud_products[phone]);
-      }
-    }
-
-    // Migrate vouchers & items
-    if (jsonData.cloud_vouchers) {
-      for (const phone of Object.keys(jsonData.cloud_vouchers)) {
-        const vMap = jsonData.cloud_vouchers[phone];
-        const itList = jsonData.cloud_voucher_items ? jsonData.cloud_voucher_items[phone] : [];
-        await saveVouchers(phone, vMap, itList);
-      }
-    }
-
-    console.log('[PostgreSQL] Auto-migration completed successfully!');
-  } catch (err) {
-    console.error(`[PostgreSQL Error] Auto-migration failed: ${err.message}`);
+async function syncGroups(userPhone, groupsList) {
+  if (!pool || !userPhone || !Array.isArray(groupsList)) return;
+  for (const g of groupsList) {
+    if (!g || !g.trim()) continue;
+    await pool.query(`
+      INSERT INTO product_groups (user_phone, name)
+      VALUES ($1, $2)
+      ON CONFLICT (user_phone, name) DO NOTHING
+    `, [userPhone, g.trim()]);
   }
+}
+
+async function syncUnits(userPhone, unitsList) {
+  if (!pool || !userPhone || !Array.isArray(unitsList)) return;
+  for (const u of unitsList) {
+    if (!u || !u.trim()) continue;
+    await pool.query(`
+      INSERT INTO product_units (user_phone, name)
+      VALUES ($1, $2)
+      ON CONFLICT (user_phone, name) DO NOTHING
+    `, [userPhone, u.trim()]);
+  }
+}
+
+async function syncPayments(userPhone, paymentsList) {
+  if (!pool || !userPhone || !Array.isArray(paymentsList)) return;
+  for (const p of paymentsList) {
+    await pool.query(`
+      INSERT INTO payments (user_phone, voucher_id, customer_name, amount, payment_method, payment_type, date, notes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `, [
+      userPhone,
+      p.voucherId || '',
+      p.customerName || '',
+      Number(p.amount || 0),
+      p.paymentMethod || 'Cash',
+      p.paymentType || 'Sale',
+      Number(p.date || Date.now()),
+      p.notes || ''
+    ]);
+  }
+}
+
+async function syncSuppliers(userPhone, suppliersList) {
+  if (!pool || !userPhone || !Array.isArray(suppliersList)) return;
+  for (const s of suppliersList) {
+    if (!s.name) continue;
+    await pool.query(`
+      INSERT INTO suppliers (user_phone, name, phone, email, address, total_payable, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (user_phone, name) DO UPDATE SET
+        phone = EXCLUDED.phone,
+        email = EXCLUDED.email,
+        address = EXCLUDED.address,
+        total_payable = EXCLUDED.total_payable
+    `, [
+      userPhone,
+      s.name,
+      s.phone || '',
+      s.email || '',
+      s.address || '',
+      Number(s.totalPayable || 0),
+      Date.now()
+    ]);
+  }
+}
+
+// -------------------------------------------------------------
+// PULL & RESTORE ALL DATA (Direct SQL streaming for tenant)
+// -------------------------------------------------------------
+
+async function pullUserData(userPhone) {
+  if (!pool || !userPhone) {
+    return { vouchers: [], voucherItems: [], products: [], customers: [], groups: [], units: [], payments: [], suppliers: [], expenseCategories: [], expenses: [] };
+  }
+
+  const [prodRes, vouchRes, itemRes, custRes, groupRes, unitRes, payRes, suppRes] = await Promise.all([
+    pool.query('SELECT * FROM products WHERE user_phone = $1 AND is_active = TRUE ORDER BY name ASC', [userPhone]),
+    pool.query('SELECT * FROM vouchers WHERE user_phone = $1 ORDER BY created_at DESC', [userPhone]),
+    pool.query('SELECT * FROM voucher_items WHERE user_phone = $1', [userPhone]),
+    pool.query('SELECT * FROM customers WHERE user_phone = $1 ORDER BY name ASC', [userPhone]),
+    pool.query('SELECT name FROM product_groups WHERE user_phone = $1', [userPhone]),
+    pool.query('SELECT name FROM product_units WHERE user_phone = $1', [userPhone]),
+    pool.query('SELECT * FROM payments WHERE user_phone = $1 ORDER BY date DESC', [userPhone]),
+    pool.query('SELECT * FROM suppliers WHERE user_phone = $1 ORDER BY name ASC', [userPhone])
+  ]);
+
+  const products = prodRes.rows.map(r => ({
+    id: Number(r.id),
+    name: r.name,
+    category: r.category,
+    group: r.group_name,
+    group_name: r.group_name,
+    unit: r.unit,
+    price: Number(r.price),
+    cost: Number(r.cost),
+    quantity: Number(r.quantity),
+    initialStock: Number(r.initial_stock),
+    sku: r.sku,
+    barcode: r.barcode,
+    imageUrl: r.image_url,
+    updatedAt: Number(r.updated_at)
+  }));
+
+  const vouchers = vouchRes.rows.map(r => ({
+    receiptNo: r.receipt_no,
+    voucherId: r.voucher_id ? Number(r.voucher_id) : null,
+    customerName: r.customer_name,
+    customerPhone: r.customer_phone,
+    totalAmount: Number(r.total_amount),
+    discount: Number(r.discount),
+    netAmount: Number(r.net_amount),
+    tax: Number(r.tax),
+    paidAmount: Number(r.paid_amount),
+    changeAmount: Number(r.change_amount),
+    paymentMethod: r.payment_method,
+    isCompleted: r.is_completed,
+    isPurchase: r.is_purchase,
+    isCredit: r.is_credit,
+    notes: r.notes,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at)
+  }));
+
+  const voucherItems = itemRes.rows.map(r => ({
+    voucherId: r.receipt_no,
+    voucher_id: r.receipt_no,
+    productId: r.product_id ? Number(r.product_id) : null,
+    productName: r.product_name,
+    quantity: Number(r.quantity),
+    sellingPrice: Number(r.unit_price),
+    purchasePrice: Number(r.cost_price),
+    totalPrice: Number(r.total_price),
+    unit: r.unit
+  }));
+
+  const customers = custRes.rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    phone: r.phone,
+    email: r.email,
+    address: r.address,
+    totalDebt: Number(r.total_debt),
+    points: r.points
+  }));
+
+  const groups = groupRes.rows.map(r => r.name);
+  const units = unitRes.rows.map(r => r.name);
+
+  const payments = payRes.rows.map(r => ({
+    voucherId: r.voucher_id,
+    customerName: r.customer_name,
+    amount: Number(r.amount),
+    paymentMethod: r.payment_method,
+    paymentType: r.payment_type,
+    date: Number(r.date),
+    notes: r.notes
+  }));
+
+  const suppliers = suppRes.rows.map(r => ({
+    name: r.name,
+    phone: r.phone,
+    email: r.email,
+    address: r.address,
+    totalPayable: Number(r.total_payable)
+  }));
+
+  return {
+    products,
+    vouchers,
+    voucherItems,
+    customers,
+    groups,
+    units,
+    payments,
+    suppliers,
+    expenseCategories: [],
+    expenses: []
+  };
+}
+
+// -------------------------------------------------------------
+// SYNC STATUS (Direct SQL count aggregation)
+// -------------------------------------------------------------
+
+async function getSyncStatus(userPhone) {
+  if (!pool || !userPhone) {
+    return { vouchersCount: 0, salesCount: 0, purchasesCount: 0, debtsCount: 0, productsCount: 0, customersCount: 0, suppliersCount: 0, expensesCount: 0 };
+  }
+
+  const res = await pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM vouchers WHERE user_phone = $1) as vouchers_count,
+      (SELECT COUNT(*) FROM vouchers WHERE user_phone = $1 AND is_purchase = FALSE) as sales_count,
+      (SELECT COUNT(*) FROM vouchers WHERE user_phone = $1 AND is_purchase = TRUE) as purchases_count,
+      (SELECT COUNT(*) FROM vouchers WHERE user_phone = $1 AND is_credit = TRUE) as debts_count,
+      (SELECT COUNT(*) FROM products WHERE user_phone = $1 AND is_active = TRUE) as products_count,
+      (SELECT COUNT(*) FROM customers WHERE user_phone = $1) as customers_count,
+      (SELECT COUNT(*) FROM suppliers WHERE user_phone = $1) as suppliers_count,
+      (SELECT COUNT(*) FROM expenses WHERE user_phone = $1) as expenses_count
+  `, [userPhone]);
+
+  const r = res.rows[0];
+  return {
+    vouchersCount: Number(r.vouchers_count || 0),
+    salesCount: Number(r.sales_count || 0),
+    purchasesCount: Number(r.purchases_count || 0),
+    debtsCount: Number(r.debts_count || 0),
+    productsCount: Number(r.products_count || 0),
+    customersCount: Number(r.customers_count || 0),
+    suppliersCount: Number(r.suppliers_count || 0),
+    expensesCount: Number(r.expenses_count || 0)
+  };
 }
 
 module.exports = {
   initPostgres,
-  loadAllFromPostgres,
-  saveUser,
-  saveProducts,
-  saveVouchers,
-  deleteProduct,
-  deleteVoucher,
-  autoMigrateFromJson,
   isPostgresActive: () => isPostgresConnected,
-  getPool: () => pool
+  getPool: () => pool,
+  getUserByPhone,
+  createUser,
+  updateUser,
+  deleteUser,
+  getAllUsers,
+  getAdminStats,
+  getAdminPassword,
+  setAdminPassword,
+  syncProducts,
+  deleteProduct,
+  deleteProductsBatch,
+  syncVoucher,
+  syncVouchersBatch,
+  deleteVoucher,
+  syncCustomers,
+  syncGroups,
+  syncUnits,
+  syncPayments,
+  syncSuppliers,
+  pullUserData,
+  getSyncStatus
 };
