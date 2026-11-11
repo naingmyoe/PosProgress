@@ -1,4 +1,4 @@
-/**
+/**a
  * UN POS Backend Server for VPS (Linux / Ubuntu / Debian / Windows)
  * 100% Stateless & Direct PostgreSQL Architecture
  * ZERO In-Memory Cache (Extremely low RAM usage, scales effortlessly to 100,000+ users)
@@ -76,7 +76,6 @@ async function evaluateUserAccess(u, clientDeviceId) {
           message: 'ဤအကောင့်ကို အများဆုံး စက် ၅ လုံးအထိသာ သုံးခွင့်ပြုထားပါသည် (Device limit of 5 reached)',
           expiresAt: u.expires_at,
           daysLeft: Math.max(0, Math.ceil((u.expires_at - now) / (24 * 60 * 60 * 1000))),
-          isTrial: true,
           deviceCount: u.devices.length,
           maxDevices: 5
         };
@@ -98,7 +97,6 @@ async function evaluateUserAccess(u, clientDeviceId) {
       message: 'အကောင့် သက်တမ်းကုန်ဆုံးသွားပါပြီ။ သက်တမ်းတိုးရန် ဆက်သွယ်ပါ (Account Expired)',
       expiresAt: u.expires_at,
       daysLeft: 0,
-      isTrial: true,
       deviceCount: u.devices.length,
       maxDevices: 5
     };
@@ -110,7 +108,6 @@ async function evaluateUserAccess(u, clientDeviceId) {
     message: 'အကောင့် အသုံးပြုခွင့် ရှိပါသည်',
     expiresAt: u.expires_at,
     daysLeft: Math.max(0, Math.ceil((u.expires_at - now) / (24 * 60 * 60 * 1000))),
-    isTrial: true,
     deviceCount: u.devices.length,
     maxDevices: 5
   };
@@ -228,7 +225,6 @@ const server = http.createServer(async (req, res) => {
         status: 'on',
         expiresAt: newUser.expires_at,
         daysLeft: 7,
-        isTrial: true,
         user: {
           phoneNo: newUser.phone,
           username: newUser.name,
@@ -237,7 +233,6 @@ const server = http.createServer(async (req, res) => {
           role: newUser.role,
           expiresAt: newUser.expires_at,
           daysLeft: 7,
-          isTrial: true,
           deviceCount: initialDevices.length,
           maxDevices: 5
         }
