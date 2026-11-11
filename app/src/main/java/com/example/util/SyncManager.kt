@@ -595,12 +595,21 @@ object SyncManager {
                             put("id", p.id)
                             put("name", p.name)
                             put("groupName", p.groupName)
+                            put("group_name", p.groupName)
                             put("purchasePrice", p.purchasePrice)
                             put("sellingPrice", p.sellingPrice)
+                            put("price", p.sellingPrice)
+                            put("cost", p.purchasePrice)
                             put("unit", p.unit)
                             put("barcode", p.barcode)
                             put("quantity", p.quantity)
+                            put("initialStock", p.quantity)
+                            put("initial_stock", p.quantity)
                             put("alertQuantity", p.alertQuantity)
+                            put("alert_quantity", p.alertQuantity)
+                            put("trackStock", p.trackStock)
+                            put("track_stock", p.trackStock)
+                            put("note", p.note)
                         })
                         pIds.add(p.id)
                     }
@@ -1004,18 +1013,24 @@ object SyncManager {
 
                     val existing = (if (prodId > 0) localProdsById[prodId] else null) ?: localProdsByName[normName]
                     if (existing != null) {
+                        // CRITICAL: If local product has unsynced changes (e.g. user just updated stock or price),
+                        // DO NOT overwrite with stale cloud data!
+                        val finalProductQty = if (!existing.isSynced) existing.quantity else finalQty
+                        val finalAlertQty = if (!existing.isSynced) existing.alertQuantity else aQty
+                        val finalSPrice = if (!existing.isSynced && existing.sellingPrice > 0.0) existing.sellingPrice else sPrice
+                        val finalPPrice = if (!existing.isSynced && existing.purchasePrice > 0.0) existing.purchasePrice else pPrice
                         val updated = existing.copy(
                             name = pName,
                             groupName = gName,
-                            purchasePrice = pPrice,
-                            sellingPrice = sPrice,
+                            purchasePrice = finalPPrice,
+                            sellingPrice = finalSPrice,
                             unit = unit,
                             note = note,
                             trackStock = track,
                             barcode = barcode,
-                            quantity = finalQty,
-                            alertQuantity = aQty,
-                            isSynced = !hasPendingDeltas
+                            quantity = finalProductQty,
+                            alertQuantity = finalAlertQty,
+                            isSynced = if (!existing.isSynced) false else !hasPendingDeltas
                         )
                         repository.updateProduct(updated)
                     } else {
